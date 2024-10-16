@@ -1,6 +1,6 @@
 open Current.Syntax
 open Lwt.Infix
-
+open Opam_ci_check
 module Git = Current_git
 module Raw = Current_docker.Raw
 

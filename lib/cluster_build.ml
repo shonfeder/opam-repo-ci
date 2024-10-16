@@ -1,6 +1,7 @@
 open Current.Syntax
 open Capnp_rpc_lwt
 open Lwt.Infix
+open Opam_ci_check
 
 module Git = Current_git
 

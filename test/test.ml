@@ -1,6 +1,5 @@
-
-
 open Opam_repo_ci
+open Opam_ci_check
 
 module Git = Current_git
 
