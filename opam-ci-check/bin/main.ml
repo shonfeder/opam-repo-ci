@@ -4,6 +4,7 @@
 
 open Cmdliner
 open Opam_ci_check
+module Distro = Dockerfile_opam.Distro
 
 (* This is Cmdliner.Term.map, which is not available in Cmdliner 1.1.1 *)
 let map_term f x = Term.app (Term.const f) x
@@ -25,6 +26,34 @@ let lint (changed_pkgs, new_pkgs) dir =
       errors |> List.map Lint.msg_of_error |> String.concat "\n"
       |> Printf.sprintf "%s\n" |> Result.error
 
+type build_spec = BuildTest
+
+let make_config pkg type_ =
+  let variant =
+    let distro =
+      (Distro.resolve_alias Distro.master_distro :> Distro.t)
+      |> Distro.tag_of_distro
+    in
+    let latest_major, latest_minor =
+      Ocaml_version.(major Releases.latest, minor Releases.latest)
+    in
+    let compiler =
+      Ocaml_version.(to_string Ocaml_version.(v latest_major latest_minor))
+    in
+    Variant.v ~distro ~compiler:(compiler, None) ~arch:`X86_64
+  in
+  let opam_version = `Dev in
+  match type_ with
+  | BuildTest ->
+      Spec.opam ~variant ~lower_bounds:false ~with_tests:true ~opam_version pkg
+
+let build_run_spec spec_type pkg opam_repository =
+  let pkg = OpamPackage.of_string pkg in
+  let config = make_config pkg spec_type in
+  let base = Spec.Docker ("ocaml/opam:" ^ Variant.docker_tag config.variant) in
+  let status = Test.build_run_spec ~opam_repository ~base config in
+  if status > 0 then Error "Failed to build and test the package" else Ok ()
+
 let make_abs_path s =
   if Filename.is_relative s then Filename.concat (Sys.getcwd ()) s else s
 
@@ -44,6 +73,10 @@ let opam_repo_dir =
   in
   let print fmt = function Some s -> Format.fprintf fmt "%s" s | None -> () in
   Arg.conv (parse, print)
+
+let pkg_term =
+  let info = Arg.info [] ~doc:"Package name + version" in
+  Arg.required (Arg.pos 0 (Arg.some Arg.string) None info)
 
 let local_opam_repo_term =
   let info =
@@ -90,11 +123,23 @@ let lint_cmd =
   in
   Cmd.v info term
 
+let build_test_cmd =
+  let doc = "Build and test a package" in
+  let term =
+    Term.(
+      const build_run_spec $ const BuildTest $ pkg_term $ local_opam_repo_term)
+    |> to_exit_code
+  in
+  let info =
+    Cmd.info "build-test" ~doc ~sdocs:"COMMON OPTIONS" ~exits:Cmd.Exit.defaults
+  in
+  Cmd.v info term
+
 let cmd : Cmd.Exit.code Cmd.t =
   let doc = "A tool to list revdeps and test the revdeps locally" in
   let exits = Cmd.Exit.defaults in
   let default = Term.(ret (const (fun _ -> `Help (`Pager, None)) $ const ())) in
   let info = Cmd.info "opam-ci-check" ~doc ~sdocs:"COMMON OPTIONS" ~exits in
-  Cmd.group ~default info [ lint_cmd ]
+  Cmd.group ~default info [ lint_cmd; build_test_cmd ]
 
 let () = exit (Cmd.eval' cmd)
