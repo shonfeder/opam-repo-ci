@@ -10,5 +10,4 @@
   str
   bos
   ocaml-version
-  obuilder-spec
-  current_docker))
+  obuilder-spec))
