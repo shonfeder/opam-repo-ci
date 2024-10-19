@@ -15,18 +15,15 @@ let to_exit_code : (unit, string) result Term.t -> Cmd.Exit.code Term.t =
       Printf.eprintf "%s%!" msg;
       1
 
-let lint (changed_pkgs, new_pkgs) local_repo_dir =
-  match local_repo_dir with
-  | None -> failwith "TODO: default to using the opam repository"
-  | Some d -> (
-      print_endline @@ Printf.sprintf "Linting opam-repository at %s ..." d;
-      match Lint.check ~new_pkgs ~changed_pkgs d with
-      | [] ->
-          print_endline "No errors";
-          Ok ()
-      | errors ->
-          errors |> List.map Lint.msg_of_error |> String.concat "\n"
-          |> Printf.sprintf "%s\n" |> Result.error)
+let lint (changed_pkgs, new_pkgs) dir =
+  print_endline @@ Printf.sprintf "Linting opam-repository at %s ..." dir;
+  match Lint.check ~new_pkgs ~changed_pkgs dir with
+  | [] ->
+      print_endline "No errors";
+      Ok ()
+  | errors ->
+      errors |> List.map Lint.msg_of_error |> String.concat "\n"
+      |> Printf.sprintf "%s\n" |> Result.error
 
 let make_abs_path s =
   if Filename.is_relative s then Filename.concat (Sys.getcwd ()) s else s
@@ -56,7 +53,7 @@ let local_opam_repo_term =
          required if we wish to test a version of a package not released on \
          the opam repository."
   in
-  Arg.value (Arg.opt opam_repo_dir None info)
+  Arg.required (Arg.opt opam_repo_dir None info)
 
 let changed_pkgs_term =
   let info =
