@@ -28,48 +28,6 @@ let lint (changed_pkgs, new_pkgs) local_repo_dir =
           errors |> List.map Lint.msg_of_error |> String.concat "\n"
           |> Printf.sprintf "%s\n" |> Result.error)
 
-let show_revdeps pkg local_repo_dir no_transitive_revdeps =
-  (* Get revdeps for the package *)
-  let revdeps =
-    Revdeps.list_revdeps ?opam_repo:local_repo_dir
-      ~transitive:(not no_transitive_revdeps)
-      pkg
-  in
-  Revdeps.Display.packages revdeps;
-  Ok ()
-
-let testing_revdeps_confirmed revdeps =
-  OpamConsole.confirm "Do you want test %d revdeps?" (List.length revdeps)
-
-let test_revdeps pkg local_repo_dir use_dune no_transitive_revdeps =
-  (* Get revdeps for the package *)
-  let revdeps =
-    Revdeps.list_revdeps ?opam_repo:local_repo_dir
-      ~transitive:(not no_transitive_revdeps)
-      pkg
-  in
-
-  (* Install and test the first reverse dependency *)
-  let latest_versions = Revdeps.find_latest_versions revdeps in
-
-  Revdeps.Display.packages latest_versions;
-  if not (testing_revdeps_confirmed latest_versions) then Ok ()
-  else
-    match (use_dune, local_repo_dir) with
-    | true, Some d -> Test.test_packages_with_dune d pkg latest_versions
-    | true, None -> Error "Opam local repository path must be specified!\n"
-    | false, _ ->
-        let num_failed_installs =
-          Test.test_packages_with_opam pkg latest_versions
-          |> Seq.map (fun e -> Printf.eprintf "%s\n" (Test.error_to_string e))
-          |> Seq.length
-        in
-        if num_failed_installs = 0 then Ok ()
-        else
-          Error
-            (Printf.sprintf "tests failed in %d reverse dependencies"
-               num_failed_installs)
-
 let make_abs_path s =
   if Filename.is_relative s then Filename.concat (Sys.getcwd ()) s else s
 
@@ -99,26 +57,6 @@ let local_opam_repo_term =
          the opam repository."
   in
   Arg.value (Arg.opt opam_repo_dir None info)
-
-let no_transitive_revdeps =
-  let info =
-    Arg.info [ "no-transitive" ]
-      ~doc:
-        "Don't test transitive reverse dependencies - only test the direct \
-         reverse dependencies."
-  in
-  Arg.value (Arg.flag info)
-
-let use_dune_term =
-  let info =
-    Arg.info [ "d"; "use-dune" ]
-      ~doc:"Use dune to build, install and test the reverse dependencies."
-  in
-  Arg.value (Arg.flag info)
-
-let pkg_term =
-  let info = Arg.info [] ~doc:"Package name + version" in
-  Arg.required (Arg.pos 0 (Arg.some Arg.string) None info)
 
 let changed_pkgs_term =
   let info =
@@ -155,37 +93,11 @@ let lint_cmd =
   in
   Cmd.v info term
 
-let list_cmd =
-  let doc = "List the revdeps for a package" in
-  let term =
-    Term.(
-      const show_revdeps $ pkg_term $ local_opam_repo_term
-      $ no_transitive_revdeps)
-    |> to_exit_code
-  in
-  let info =
-    Cmd.info "list" ~doc ~sdocs:"COMMON OPTIONS" ~exits:Cmd.Exit.defaults
-  in
-  Cmd.v info term
-
-let test_cmd =
-  let doc = "Test the revdeps for a package" in
-  let term =
-    Term.(
-      const test_revdeps $ pkg_term $ local_opam_repo_term $ use_dune_term
-      $ no_transitive_revdeps)
-    |> to_exit_code
-  in
-  let info =
-    Cmd.info "test" ~doc ~sdocs:"COMMON OPTIONS" ~exits:Cmd.Exit.defaults
-  in
-  Cmd.v info term
-
 let cmd : Cmd.Exit.code Cmd.t =
   let doc = "A tool to list revdeps and test the revdeps locally" in
   let exits = Cmd.Exit.defaults in
   let default = Term.(ret (const (fun _ -> `Help (`Pager, None)) $ const ())) in
   let info = Cmd.info "opam-ci-check" ~doc ~sdocs:"COMMON OPTIONS" ~exits in
-  Cmd.group ~default info [ lint_cmd; list_cmd; test_cmd ]
+  Cmd.group ~default info [ lint_cmd ]
 
 let () = exit (Cmd.eval' cmd)
