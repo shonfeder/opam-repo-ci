@@ -26,7 +26,7 @@ let lint (changed_pkgs, new_pkgs) dir =
       errors |> List.map Lint.msg_of_error |> String.concat "\n"
       |> Printf.sprintf "%s\n" |> Result.error
 
-type build_spec = BuildTest
+type build_spec = BuildTest | BuildLowerBounds
 
 let make_config pkg type_ =
   let variant =
@@ -46,6 +46,8 @@ let make_config pkg type_ =
   match type_ with
   | BuildTest ->
       Spec.opam ~variant ~lower_bounds:false ~with_tests:true ~opam_version pkg
+  | BuildLowerBounds ->
+      Spec.opam ~variant ~lower_bounds:true ~with_tests:false ~opam_version pkg
 
 let build_run_spec spec_type pkg opam_repository =
   let pkg = OpamPackage.of_string pkg in
@@ -135,11 +137,25 @@ let build_test_cmd =
   in
   Cmd.v info term
 
+let lower_bounds_cmd =
+  let doc = "Build a package with lower bounds of dependencies" in
+  let term =
+    Term.(
+      const build_run_spec $ const BuildLowerBounds $ pkg_term
+      $ local_opam_repo_term)
+    |> to_exit_code
+  in
+  let info =
+    Cmd.info "lower-bounds" ~doc ~sdocs:"COMMON OPTIONS"
+      ~exits:Cmd.Exit.defaults
+  in
+  Cmd.v info term
+
 let cmd : Cmd.Exit.code Cmd.t =
   let doc = "A tool to list revdeps and test the revdeps locally" in
   let exits = Cmd.Exit.defaults in
   let default = Term.(ret (const (fun _ -> `Help (`Pager, None)) $ const ())) in
   let info = Cmd.info "opam-ci-check" ~doc ~sdocs:"COMMON OPTIONS" ~exits in
-  Cmd.group ~default info [ lint_cmd; build_test_cmd ]
+  Cmd.group ~default info [ lint_cmd; build_test_cmd; lower_bounds_cmd ]
 
 let () = exit (Cmd.eval' cmd)
