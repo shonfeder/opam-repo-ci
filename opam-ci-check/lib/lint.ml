@@ -2,7 +2,6 @@
  * Copyright (c) 2024 Puneeth Chaganti <punchagan@muse-amuse.in>, Shon Feder <shon.feder@gmail.com>, Tarides <contact@tarides.com>
  *)
 
-module D = Dir_helpers
 module O = Opam_helpers
 
 let ( // ) = Filename.concat
@@ -172,8 +171,20 @@ module Checks = struct
     | None | Some [] -> []
     | Some _ -> [ (pkg, ExtraFiles) ]
 
-  let get_dune_project_version ~pkg url =
-    D.with_temp_dir "lint-dune-project-version-" @@ fun dir ->
+  let parse_dune_project_version dune_project =
+    match
+      In_channel.input_all
+      |> In_channel.with_open_text dune_project
+      |> Sexplib.Sexp.parse
+    with
+    | exception Sys_error _ -> Ok None
+    | Sexplib.Sexp.Done (List [ Atom "lang"; Atom "dune"; Atom version ], _) ->
+        Ok (Some version)
+    | Done _ -> Error "(lang dune ...) is not the first construct"
+    | Cont _ -> Error "Failed to parse the dune-project file"
+
+  let pull_pkg_get_version dir (pkg, url) =
+    let dir = Fpath.to_string dir in
     let res =
       OpamProcess.Job.run
       @@ OpamRepository.pull_tree
@@ -184,19 +195,19 @@ module Checks = struct
     in
     match res with
     | OpamTypes.Not_available (_, msg) -> Error msg
-    | Up_to_date _ | Result _ -> (
+    | Up_to_date _ | Result _ ->
         let dune_project = Filename.concat dir "dune-project" in
-        match
-          In_channel.input_all
-          |> In_channel.with_open_text dune_project
-          |> Sexplib.Sexp.parse
-        with
-        | exception Sys_error _ -> Ok None
-        | Sexplib.Sexp.Done (List [ Atom "lang"; Atom "dune"; Atom version ], _)
-          ->
-            Ok (Some version)
-        | Done _ -> Error "(lang dune ...) is not the first construct"
-        | Cont _ -> Error "Failed to parse the dune-project file")
+        parse_dune_project_version dune_project
+
+  let get_dune_project_version ~pkg url =
+    Bos.OS.Dir.with_tmp "lint-dune-project-version-%s" pull_pkg_get_version
+      (pkg, url)
+    |> function
+    | Ok v -> v
+    | Error (`Msg e) ->
+        Error
+          (Printf.sprintf
+             "Failed to make temporary directory to pull project: %s" e)
 
   let is_dune name =
     OpamPackage.Name.equal name (OpamPackage.Name.of_string "dune")
@@ -317,7 +328,8 @@ module Checks = struct
     let dash_underscore p0 p1 =
       let f = function
         | '_' | '-' -> None
-        | c -> Some (Char.lowercase_ascii c) in
+        | c -> Some (Char.lowercase_ascii c)
+      in
       let p0 = p0 |> String.to_seq |> Seq.filter_map f in
       let p1 = p1 |> String.to_seq |> Seq.filter_map f in
       Seq.equal Char.equal p0 p1

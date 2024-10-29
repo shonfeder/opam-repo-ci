@@ -3,7 +3,6 @@
  *)
 
 module H = Dune_helpers
-module D = Dir_helpers
 
 type error = OpamPackage.t * exn
 
