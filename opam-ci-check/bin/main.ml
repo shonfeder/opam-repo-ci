@@ -49,11 +49,11 @@ let make_config pkg type_ =
   | BuildLowerBounds ->
       Spec.opam ~variant ~lower_bounds:true ~with_tests:false ~opam_version pkg
 
-let build_run_spec spec_type pkg opam_repository =
+let build_run_spec no_cache spec_type pkg opam_repository =
   let pkg = OpamPackage.of_string pkg in
   let config = make_config pkg spec_type in
   let base = Spec.Docker ("ocaml/opam:" ^ Variant.docker_tag config.variant) in
-  Test.build_run_spec ~opam_repository ~base config
+  Test.build_run_spec ~use_cache:(not no_cache) ~opam_repository ~base config
   |> Result.map_error (fun _ -> "Failed to build and test the package")
 
 let make_abs_path s =
@@ -125,11 +125,18 @@ let lint_cmd =
   in
   Cmd.v info term
 
+let no_cache =
+  let info =
+    Arg.info [ "no-cache" ]
+      ~doc:"Don't use the docker cache"
+  in
+  Arg.value (Arg.flag info)
+
 let build_test_cmd =
   let doc = "Build and test a package" in
   let term =
     Term.(
-      const build_run_spec $ const BuildTest $ pkg_term $ local_opam_repo_term)
+      const build_run_spec $ no_cache $ const BuildTest $ pkg_term $ local_opam_repo_term)
     |> to_exit_code
   in
   let info =
@@ -141,7 +148,7 @@ let lower_bounds_cmd =
   let doc = "Build a package with lower bounds of dependencies" in
   let term =
     Term.(
-      const build_run_spec $ const BuildLowerBounds $ pkg_term
+      const build_run_spec $ no_cache $ const BuildLowerBounds $ pkg_term
       $ local_opam_repo_term)
     |> to_exit_code
   in

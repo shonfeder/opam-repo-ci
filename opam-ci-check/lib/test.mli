@@ -8,6 +8,7 @@ type error = OpamPackage.t * exn
 val error_to_string : error -> string
 
 val build_run_spec :
+  ?use_cache:bool ->
   opam_repository:string ->
   base:Spec.base ->
   Spec.t ->

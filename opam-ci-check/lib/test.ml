@@ -14,12 +14,14 @@ let error_to_string : error -> string =
 
 let (let*) = Result.bind
 
-let build_run_spec ~opam_repository ~base config =
+let docker_build = Bos.Cmd.(v "docker" %  "build")
+
+let build_run_spec ?(use_cache=true) ~opam_repository ~base config =
   let spec = Opam_build.build_spec ~local:true ~for_docker:true ~base config in
   let dockerfile =
     Obuilder_spec.Docker.dockerfile_of_spec ~buildkit:false ~os:`Unix spec
   in
-  (* TODO: Use docker ability to build form git repos to default to official opam repo
+  (* TODO: Maybe docker ability to build form git repos to default to official opam repo
      https://docs.docker.com/build/concepts/context/#git-repositories *)
   let dir = Fpath.v opam_repository in
   let dockerignore = ".git\nREADME.md\n" in
@@ -35,9 +37,9 @@ let build_run_spec ~opam_repository ~base config =
       let* () = Bos.OS.File.write dockerfile_path dockerfile in
       let* () = Bos.OS.Dir.set_current dir in
       let cmd =
-        Bos.Cmd.(v "docker"
-                 %  "build"
-                 % "--no-cache"
+        let with_cache = if use_cache then Bos.Cmd.empty else Bos.Cmd.v "--no-cache" in
+        Bos.Cmd.(docker_build
+                 %% with_cache
                  % "--progress=plain"
                  % "--file" % Fpath.to_string dockerfile_path
                  % "--" % "." )
