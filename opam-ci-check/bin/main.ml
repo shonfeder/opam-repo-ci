@@ -53,8 +53,8 @@ let build_run_spec spec_type pkg opam_repository =
   let pkg = OpamPackage.of_string pkg in
   let config = make_config pkg spec_type in
   let base = Spec.Docker ("ocaml/opam:" ^ Variant.docker_tag config.variant) in
-  let status = Test.build_run_spec ~opam_repository ~base config in
-  if status > 0 then Error "Failed to build and test the package" else Ok ()
+  Test.build_run_spec ~opam_repository ~base config
+  |> Result.map_error (fun _ -> "Failed to build and test the package")
 
 let make_abs_path s =
   if Filename.is_relative s then Filename.concat (Sys.getcwd ()) s else s

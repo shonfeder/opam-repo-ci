@@ -11,4 +11,4 @@ val build_run_spec :
   opam_repository:string ->
   base:Spec.base ->
   Spec.t ->
-  int
+  (unit, Rresult.R.msg) result
