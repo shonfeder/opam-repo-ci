@@ -71,25 +71,21 @@ let test_revdeps pkg local_repo_dir use_dune no_transitive_revdeps =
             (Printf.sprintf "tests failed in %d reverse dependencies"
                num_failed_installs)
 
-let make_config ~with_tests ~lower_bounds pkg =
-  let variant =
-    let distro =
-      (Distro.resolve_alias Distro.master_distro :> Distro.t)
-      |> Distro.tag_of_distro
-    in
-    let compiler =
-      Ocaml_version.(to_string (with_just_major_and_minor Releases.latest))
-    in
-    (* TODO: Support other archs *)
-    Variant.v ~distro ~compiler:(compiler, None) ~arch:`X86_64
-  in
-  let opam_version = `Dev in
-  Spec.opam ~variant ~lower_bounds ~with_tests ~opam_version pkg
-
-let build_run_spec no_cache with_tests lower_bounds pkg opam_repository =
+let build_run_spec ~variant ~hash ~no_cache ~with_tests ~lower_bounds ~pkg
+    ~opam_repository =
   let pkg = OpamPackage.of_string pkg in
-  let config = make_config ~with_tests ~lower_bounds pkg in
-  let base = Spec.Docker ("ocaml/opam:" ^ Variant.docker_tag config.variant) in
+  let base =
+    let hash =
+      Stdlib.Option.(hash |> map (fun h -> "@" ^ h) |> value ~default:"")
+    in
+    let image =
+      Printf.sprintf "ocaml/opam:%s%s" (Variant.docker_tag variant) hash
+    in
+    Spec.Docker image
+  in
+  let config =
+    Spec.opam ~variant ~lower_bounds ~with_tests ~opam_version:`Dev pkg
+  in
   Test.build_run_spec ~use_cache:(not no_cache) ?opam_repository ~base config
   |> Result.map_error (fun _ -> "Failed to build and test the package")
 
@@ -221,15 +217,85 @@ let lower_bounds =
   in
   Arg.value (Arg.flag info)
 
+let distro_conv =
+  let of_string s =
+    match Dockerfile_opam.Distro.distro_of_tag s with
+    | Some _ -> Ok s (* We are just validating that it is a supported distro *)
+    | None -> Error (`Msg (s ^ " is not a supported distro"))
+  in
+  let pp = Fmt.string in
+  Arg.conv ~docv:"DISTRO" (of_string, pp)
+
+let arch_conv =
+  let of_string = Ocaml_version.arch_of_string in
+  let pp = Fmt.of_to_string Ocaml_version.string_of_arch in
+  Arg.conv ~docv:"ARCHITECTURE" (of_string, pp)
+
+let compiler_conv =
+  let of_string s =
+    Ocaml_version.of_string s
+    |> Result.map (fun v ->
+           let variant = Ocaml_version.extra v in
+           let version =
+             v |> Ocaml_version.with_just_major_and_minor
+             |> Ocaml_version.to_string
+           in
+           (version, variant))
+  in
+  let pp =
+    Fmt.of_to_string @@ fun (ver, var) ->
+    let open Ocaml_version in
+    ver |> of_string_exn |> Fun.flip with_variant var |> to_string
+  in
+  Arg.conv ~docv:"COMPILER" (of_string, pp)
+
+(* [(let+)] is [Term.(const f $ v)] *)
+let ( let+ ) t f = Term.(const f $ t)
+
+(* [(and+)] is [Term.(const (fun x y -> (x, y)) $ a $ b)] *)
+let ( and+ ) a b = Term.(const (fun x y -> (x, y)) $ a $ b)
+
+let variant =
+  let+ arch =
+    let info = Arg.info [ "arch" ] ~doc:"TODO" in
+    Arg.value (Arg.opt arch_conv `X86_64 info)
+  and+ distro =
+    let default =
+      (Distro.resolve_alias Distro.master_distro :> Distro.t)
+      |> Distro.tag_of_distro
+    in
+    let info = Arg.info [ "distro" ] ~doc:"TODO" in
+    Arg.value (Arg.opt distro_conv default info)
+  and+ compiler =
+    let default =
+      ( Ocaml_version.(to_string (with_just_major_and_minor Releases.latest)),
+        None )
+    in
+    let info = Arg.info [ "compiler" ] ~doc:"TODO" in
+    Arg.value (Arg.opt compiler_conv default info)
+  in
+  Variant.v ~arch ~distro ~compiler
+
+let hash =
+  let info = Arg.info [ "hash" ] ~doc:"TODO" in
+  Arg.value (Arg.(opt (some string) None) info)
+
 let build_cmd =
   let doc =
     "Build a package optionally with tests and/or using lower bounds packages"
   in
   let term =
-    Term.(
-      const build_run_spec $ no_cache $ with_test $ lower_bounds $ pkg_term
-      $ local_opam_repo_term)
-    |> to_exit_code
+    to_exit_code
+    @@
+    let+ variant = variant
+    and+ hash = hash
+    and+ no_cache = no_cache
+    and+ lower_bounds = lower_bounds
+    and+ with_tests = with_test
+    and+ pkg = pkg_term
+    and+ opam_repository = local_opam_repo_term in
+    build_run_spec ~variant ~hash ~no_cache ~with_tests ~lower_bounds ~pkg
+      ~opam_repository
   in
   let info =
     Cmd.info "build" ~doc ~sdocs:"COMMON OPTIONS" ~exits:Cmd.Exit.defaults
