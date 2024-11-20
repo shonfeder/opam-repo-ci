@@ -218,20 +218,22 @@ let lower_bounds =
   in
   Arg.value (Arg.flag info)
 
-let distro_conv =
-  let of_string s =
-    match Dockerfile_opam.Distro.distro_of_tag s with
-    | Some _ -> Ok s (* We are just validating that it is a supported distro *)
-    | None -> Error (`Msg (s ^ " is not a supported distro"))
-  in
-  let pp = Fmt.string in
-  Arg.conv ~docv:"DISTRO" (of_string, pp)
+let distro_options =
+  Dockerfile_opam.Distro.distros
+  |> List.map (fun distro ->
+      let tag = Dockerfile_opam.Distro.tag_of_distro distro in
+      (tag, tag))
 
-let arch_conv =
-  let of_string = Ocaml_version.arch_of_string in
-  let pp = Fmt.of_to_string Ocaml_version.string_of_arch in
-  Arg.conv ~docv:"ARCHITECTURE" (of_string, pp)
+let arch_options =
+  Ocaml_version.arches
+  |> List.map (fun arch ->
+      (Ocaml_version.string_of_arch arch, arch))
 
+let arch_conv = Arg.enum arch_options
+let distro_conv = Arg.enum distro_options
+
+(* TODO: This should be limited to an enum, but we can't currently compute  it
+   without depending on /lib/build.ml *)
 let compiler_conv =
   let of_string s =
     Ocaml_version.of_string s
@@ -258,27 +260,45 @@ let ( and+ ) a b = Term.(const (fun x y -> (x, y)) $ a $ b)
 
 let variant =
   let+ arch =
-    let info = Arg.info [ "arch" ] ~doc:"TODO" in
+    let info = Arg.info [ "arch" ] ~doc:(
+        "The target architecture to build on. Supported architectures: " ^
+        (arch_options |> List.map fst |> String.concat ", "))
+    in
     Arg.value (Arg.opt arch_conv `X86_64 info)
   and+ distro =
     let default =
       (Distro.resolve_alias Distro.master_distro :> Distro.t)
       |> Distro.tag_of_distro
     in
-    let info = Arg.info [ "distro" ] ~doc:"TODO" in
+    let info = Arg.info [ "distro" ] ~doc:(
+        "The target distro to build on. Supported distros: " ^
+        (distro_options |> List.map fst |> String.concat ", "))
+    in
     Arg.value (Arg.opt distro_conv default info)
   and+ compiler =
     let default =
       ( Ocaml_version.(to_string (with_just_major_and_minor Releases.latest)),
         None )
     in
-    let info = Arg.info [ "compiler" ] ~doc:"TODO" in
+    let info = Arg.info [ "compiler" ] ~doc:
+        {|The compiler to build with. Supported compilers are currently
+limited to those listed in https://github.com/ocurrent/opam-repo-ci/blob/master/doc/platforms.md#ocaml-versions|}
+    in
     Arg.value (Arg.opt compiler_conv default info)
   in
   Variant.v ~arch ~distro ~compiler
 
 let hash =
-  let info = Arg.info [ "hash" ] ~doc:"TODO" in
+  let info = Arg.info [ "hash" ] ~doc:
+      {|The specific hash of a pre-built platform base to build in.  Not that
+this MUST correspond to the correct distro and compiler used for the base.
+E.g., For a docker image with the tag
+'ocaml/opam:debian-12-ocaml-4.14-flambda@sha256:4d8b208fb0017792b379e59d3fbae4be866c38af4bcbc2d1f348e4d249e6546f'
+The build must be invoked with '--distro debian-12 --compiler 4.14~flambda
+--hash sha256:4d8b208fb0017792b379e59d3fbae4be866c38af4bcbc2d1f348e4d249e6546f'.
+Use of other values for the distro and compiler will result in a build failure.
+|}
+  in
   Arg.value (Arg.(opt (some string) None) info)
 
 let only_print =
