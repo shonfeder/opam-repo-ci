@@ -52,24 +52,27 @@ let read_package_opam ~opam_repo_dir pkg =
              (OpamPackage.to_string pkg)
              msg)
 
-let lint (changed_pkgs, new_pkgs) local_repo_dir =
+type package_spec = {
+  pkg : OpamPackage.t;
+  src : string option; (* package source directory *)
+  newly_published : bool option;
+}
+
+let lint package_specs local_repo_dir =
   match local_repo_dir with
   | None -> failwith "TODO: default to using the opam repository"
   | Some opam_repo_dir -> (
       print_endline
       @@ Printf.sprintf "Linting opam-repository at %s ..." opam_repo_dir;
-      (* TODO: Allow providing package source directories from the CLI *)
       Dir_helpers.with_temp_dir "opam-ci-check-lint-" @@ fun dir ->
-      let process_package ~newly_published pkg_str =
-        let pkg = OpamPackage.of_string pkg_str in
+      let process_package { pkg; src; newly_published } =
         let opam = read_package_opam ~opam_repo_dir pkg in
-        let pkg_src_dir = fetch_package_src ~dir ~pkg opam in
+        let pkg_src_dir =
+          if Option.is_none src then fetch_package_src ~dir ~pkg opam else src
+        in
         Lint.v ~pkg ~newly_published ~pkg_src_dir opam
       in
-      let all_lint_packages =
-        List.map (process_package ~newly_published:(Some true)) new_pkgs
-        @ List.map (process_package ~newly_published:(Some false)) changed_pkgs
-      in
+      let all_lint_packages = List.map process_package package_specs in
       let errors = Lint.lint_packages ~opam_repo_dir all_lint_packages in
       match errors with
       | Ok [] ->
@@ -191,35 +194,63 @@ let pkg_term =
   let info = Arg.info [] ~doc:"Package name + version" in
   Arg.required (Arg.pos 0 (Arg.some Arg.string) None info)
 
-let changed_pkgs_term =
+let package_specs_term =
+  let package_spec_conv =
+    let parse_package_spec s =
+      try
+        let parts = String.split_on_char ':' s in
+        let name_version = List.hd parts in
+        let pkg = OpamPackage.of_string name_version in
+        let attrs =
+          match List.tl parts |> String.concat ":" with
+          | "" -> []
+          | attrs -> String.split_on_char ',' attrs
+        in
+        (* Allow only named attributes *)
+        List.iter (fun x -> assert (String.contains x '=')) attrs;
+        let src =
+          List.find_opt (fun x -> String.starts_with ~prefix:"src=" x) attrs
+          |> Option.map (fun x -> String.sub x 4 (String.length x - 4))
+        in
+        let newly_published =
+          List.find_opt (fun x -> String.starts_with ~prefix:"new=" x) attrs
+          |> Option.map (fun x -> String.sub x 4 (String.length x - 4) = "true")
+        in
+        Ok { pkg; src; newly_published }
+      with _ ->
+        Error
+          (`Msg
+            "Invalid PACKAGE_SPEC format. Expected \
+             <name.version>[:src=<path>][,new=<true|false>]")
+    in
+    let print_package_spec fmt spec =
+      let open Format in
+      fprintf fmt "%s" (OpamPackage.to_string spec.pkg);
+      (match spec.src with
+      | Some path -> fprintf fmt ":src=%s" path
+      | None -> ());
+      match spec.newly_published with
+      | Some true -> fprintf fmt ",new=true"
+      | Some false -> fprintf fmt ",new=false"
+      | None -> ()
+    in
+    Arg.conv (parse_package_spec, print_package_spec)
+  in
   let info =
-    Arg.info
-      [ "c"; "changed-packages" ]
-      ~doc:"List of changed package name + version"
+    Arg.info []
+      ~doc:
+        "List of package specifications (format: \
+         <name.version>[:src=<path>][,new=<true|false>]). If [src] is not \
+         specified, the sources are downloaded from the source URL. If [new] \
+         is not specified, it is inferred from the opam repository."
   in
-  Arg.value (Arg.opt (Arg.list Arg.string) [] info)
-
-let newly_published_pkgs_term =
-  let info =
-    Arg.info [ "n"; "newly-published" ]
-      ~doc:"List of newly published package name + version"
-  in
-  Arg.value (Arg.opt (Arg.list Arg.string) [] info)
-
-let packages_term =
-  let create_term changed_pkgs newly_published_pkgs =
-    if changed_pkgs = [] && newly_published_pkgs = [] then
-      `Error
-        ( false,
-          "You must provide at least one changed or newly published package." )
-    else `Ok (changed_pkgs, newly_published_pkgs)
-  in
-  Term.(ret (const create_term $ changed_pkgs_term $ newly_published_pkgs_term))
+  Arg.value (Arg.pos_all package_spec_conv [] info)
 
 let lint_cmd =
   let doc = "Lint the opam repository directory" in
   let term =
-    Term.(const lint $ packages_term $ local_opam_repo_term) |> to_exit_code
+    Term.(const lint $ package_specs_term $ local_opam_repo_term)
+    |> to_exit_code
   in
   let info =
     Cmd.info "lint" ~doc ~sdocs:"COMMON OPTIONS" ~exits:Cmd.Exit.defaults
