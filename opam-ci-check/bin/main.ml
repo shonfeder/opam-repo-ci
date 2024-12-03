@@ -8,6 +8,12 @@ module Distro = Dockerfile_opam.Distro
 
 let ( // ) = Filename.concat
 
+(* [(let+)] is [Term.(const f $ v)] *)
+let ( let+ ) t f = Term.(const f $ t)
+
+(* [(and+)] is [Term.(const (fun x y -> (x, y)) $ a $ b)] *)
+let ( and+ ) a b = Term.(const (fun x y -> (x, y)) $ a $ b)
+
 (* This is Cmdliner.Term.map, which is not available in Cmdliner 1.1.1 *)
 let map_term f x = Term.app (Term.const f) x
 
@@ -40,17 +46,14 @@ let read_package_opam ~opam_repo_dir pkg =
   let opam_path = Opam_helpers.path_from_pkg ~opam_repo_dir pkg // "opam" in
   (* NOTE: We use OpamFile.OPAM.read_from_channel instead of OpamFile.OPAM.file
      to prevent the name and version fields being automatically added *)
-  In_channel.with_open_text opam_path (fun ic ->
-      try OpamFile.OPAM.read_from_channel ic
-      with
-      | OpamPp.Bad_format ((_, msg) : OpamPp.bad_format)
-      | OpamPp.Bad_version (((_, msg) : OpamPp.bad_format), _)
-      ->
-        failwith
-        @@ Printf.sprintf
-             "Error in %s: Failed to parse the opam file with error - %s"
-             (OpamPackage.to_string pkg)
-             msg)
+  In_channel.with_open_text opam_path @@ fun ic ->
+  try OpamFile.OPAM.read_from_channel ic
+  with
+  | OpamPp.Bad_format ((_, msg) : OpamPp.bad_format)
+  | OpamPp.Bad_version (((_, msg) : OpamPp.bad_format), _)
+    ->
+    Printf.eprintf "Error in %s: Failed to parse the opam file due to '%s'" opam_path msg;
+    exit 1
 
 type package_spec = {
   pkg : OpamPackage.t;
@@ -194,47 +197,64 @@ let pkg_term =
   let info = Arg.info [] ~doc:"Package name + version" in
   Arg.required (Arg.pos 0 (Arg.some Arg.string) None info)
 
+let split_on_first c s =
+  match String.split_on_char c s with
+  | [a] | [a; ""] -> Ok (a, None)
+  | [a; b] -> Ok (a, Some b)
+  | _      -> Error s
+
+let arg_with_optional_attrs_conv arg_conv attrs_conv =
+  let (let^) = Result.bind in
+  let conv s =
+    match split_on_first ':' s with
+    | Ok (a, None) ->
+      let^ x = Arg.conv_parser arg_conv a in
+      Ok (x, [])
+    | Ok (a, Some attrs) ->
+      let^ x = Arg.conv_parser arg_conv a in
+      let^ attrs = Arg.(conv_parser (list attrs_conv)) attrs in
+      Ok (x, attrs)
+    | Error invalid ->
+      Fmt.error_msg
+        "Invalid argument spec %s. Argument specs should be of the form arg[:k1=v1[,k2=v2]]"
+        invalid
+  in
+  let pp fmt (x, attrs) =
+    Fmt.pf fmt "%a[:%a]"
+      Arg.(conv_printer arg_conv) x
+      Arg.(conv_printer (list ~sep:',' attrs_conv)) attrs
+  in
+  Arg.conv ~docv:"ARG[:key=value[,key=value]]" (conv, pp)
+
 let package_specs_term =
-  let package_spec_conv =
-    let parse_package_spec s =
-      try
-        let parts = String.split_on_char ':' s in
-        let name_version = List.hd parts in
-        let pkg = OpamPackage.of_string name_version in
-        let attrs =
-          match List.tl parts |> String.concat ":" with
-          | "" -> []
-          | attrs -> String.split_on_char ',' attrs
-        in
-        (* Allow only named attributes *)
-        List.iter (fun x -> assert (String.contains x '=')) attrs;
-        let src =
-          List.find_opt (fun x -> String.starts_with ~prefix:"src=" x) attrs
-          |> Option.map (fun x -> String.sub x 4 (String.length x - 4))
-        in
-        let newly_published =
-          List.find_opt (fun x -> String.starts_with ~prefix:"new=" x) attrs
-          |> Option.map (fun x -> String.sub x 4 (String.length x - 4) = "true")
-        in
-        Ok { pkg; src; newly_published }
-      with _ ->
-        Error
-          (`Msg
-            "Invalid PACKAGE_SPEC format. Expected \
-             <name.version>[:src=<path>][,new=<true|false>]")
+  let opam_file_conv =
+      let conv = Arg.parser_of_kind_of_string ~kind:"opam package spec in the form <name.version>" OpamPackage.of_string_opt in
+      let pp = Fmt.of_to_string OpamPackage.to_string in
+      Arg.conv ~docv:"PACKAGE_SPEC" (conv, pp)
+  in
+  let attr_conv =
+    let parser s =
+      match split_on_first '=' s with
+      | Ok ("new", Some b) -> (
+          match bool_of_string_opt b with
+          | Some bool -> Ok (`New bool)
+          | None   -> Error (`Msg (b ^ " must be [true] or [false]"))
+        )
+      | Ok ("src", Some dir)  -> (
+          match Sys.is_directory dir with
+          | true -> Ok (`Src dir)
+          | false -> Error (`Msg (dir ^ " is not a directory"))
+          | exception (Sys_error msg) ->  Error (`Msg msg))
+      | _ -> Error (`Msg (Printf.sprintf "%s is an not a valid attribute. Only [src=<path>] or [new=<true|false>] allowed" s) )
     in
-    let print_package_spec fmt spec =
-      let open Format in
-      fprintf fmt "%s" (OpamPackage.to_string spec.pkg);
-      (match spec.src with
-      | Some path -> fprintf fmt ":src=%s" path
-      | None -> ());
-      match spec.newly_published with
-      | Some true -> fprintf fmt ",new=true"
-      | Some false -> fprintf fmt ",new=false"
-      | None -> ()
+    let pp fmt v =
+      match v with
+      | `New b -> Fmt.pf fmt "new=%b" b
+      | `Src s -> Fmt.pf fmt "src=%s" s
     in
-    Arg.conv (parse_package_spec, print_package_spec)
+    Arg.conv ~docv:"ATTR" (parser, pp)
+  in
+  let package_spec_conv = arg_with_optional_attrs_conv opam_file_conv attr_conv
   in
   let info =
     Arg.info []
@@ -244,7 +264,14 @@ let package_specs_term =
          specified, the sources are downloaded from the source URL. If [new] \
          is not specified, it is inferred from the opam repository."
   in
-  Arg.value (Arg.pos_all package_spec_conv [] info)
+  let+ pgk_spec_data = Arg.value (Arg.pos_all package_spec_conv [] info) in
+  pgk_spec_data |>
+  List.map (fun (pkg, specs) ->
+      let src = List.find_map (function `Src s -> Some s | _ -> None) specs in
+      let newly_published = List.find_map (function `New b -> Some b | _ -> None) specs in
+      {pkg; src; newly_published}
+    )
+
 
 let lint_cmd =
   let doc = "Lint the opam repository directory" in
@@ -332,12 +359,6 @@ let compiler_conv =
     ver |> of_string_exn |> Fun.flip with_variant var |> to_string
   in
   Arg.conv ~docv:"COMPILER" (of_string, pp)
-
-(* [(let+)] is [Term.(const f $ v)] *)
-let ( let+ ) t f = Term.(const f $ t)
-
-(* [(and+)] is [Term.(const (fun x y -> (x, y)) $ a $ b)] *)
-let ( and+ ) a b = Term.(const (fun x y -> (x, y)) $ a $ b)
 
 let variant =
   let+ arch =
