@@ -364,8 +364,8 @@ let list_cmd =
   in
   Cmd.v info term
 
-let test_cmd =
-  let doc = "Test the revdeps for a package" in
+let test_revdeps_cmd =
+  let doc = "Test the revdeps for a package (EXPERIMENTAL)" in
   let term =
     Term.(
       const test_revdeps $ pkg_term $ local_opam_repo_term $ use_dune_term
@@ -373,7 +373,7 @@ let test_cmd =
     |> to_exit_code
   in
   let info =
-    Cmd.info "test" ~doc ~sdocs:"COMMON OPTIONS" ~exits:Cmd.Exit.defaults
+    Cmd.info "test-revdeps" ~doc ~sdocs:"COMMON OPTIONS" ~exits:Cmd.Exit.defaults
   in
   Cmd.v info term
 
@@ -543,6 +543,6 @@ let cmd : Cmd.Exit.code Cmd.t =
   let default = Term.(ret (const (fun _ -> `Help (`Pager, None)) $ const ())) in
   let info = Cmd.info "opam-ci-check" ~doc ~sdocs:"COMMON OPTIONS" ~exits in
   Cmd.group ~default info
-    [ lint_cmd; list_cmd; test_cmd; build_cmd; list_revdeps_cmd ]
+    [ lint_cmd; list_cmd; build_cmd; list_revdeps_cmd; test_revdeps_cmd ]
 
 let () = exit (Cmd.eval' cmd)
