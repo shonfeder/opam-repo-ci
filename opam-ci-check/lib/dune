@@ -1,16 +1,8 @@
 (library
- (name opam_ci_check_lint)
- (public_name opam-ci-check-lint)
- (modules lint lint_error opam_helpers)
- (libraries opam-state opam-format sexplib str))
-
-(library
  (name opam_ci_check)
  (public_name opam-ci-check)
  (preprocess
   (pps ppx_deriving.std ppx_deriving_yojson))
- (modules
-  (:standard \ lint lint_error opam_helpers))
  (libraries
   opam-client
   sexplib

@@ -4,7 +4,7 @@
 
 module Revdeps = Revdeps
 module Test = Test
-module Lint = Opam_ci_check_lint.Lint
+module Lint = Opam_ci_check_lint
 module Opam_helpers = Opam_ci_check_lint.Opam_helpers
 module Opam_build = Opam_build
 module Variant = Variant
